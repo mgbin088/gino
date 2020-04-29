@@ -5,11 +5,11 @@ from sqlalchemy.engine.url import make_url, URL
 from sqlalchemy.sql.base import Executable
 from sqlalchemy.sql.schema import SchemaItem
 
+from . import json_support
 from .crud import CRUDModel
 from .declarative import declarative_base, declared_attr
 from .exceptions import UninitializedError
 from .schema import GinoSchemaVisitor, patch_schema
-from . import json_support
 
 
 class GinoExecutor:
@@ -185,10 +185,7 @@ class GinoExecutor:
         (:class:`Gino`) is bound, while metadata is found in this query.
 
         """
-        connection = self._query.bind.current_connection
-        if connection is None:
-            raise ValueError("No Connection in context, please provide one")
-        return connection.iterate(self._query, *multiparams, **params)
+        return self._query.bind.iterate(self._query, *multiparams, **params)
 
 
 class _BindContext:
@@ -354,6 +351,9 @@ class Gino(sa.MetaData):
         self._model = declarative_base(self, model_classes)
         self.declared_attr = declared_attr
         self.quoted_name = sa.sql.quoted_name
+        from .bakery import Bakery
+
+        self._bakery = Bakery()
         for mod in json_support, sa:
             for key in mod.__all__:
                 if not hasattr(self, key) and key not in self.no_delegate:
@@ -414,7 +414,7 @@ class Gino(sa.MetaData):
         if isinstance(bind, URL):
             from . import create_engine
 
-            bind = await create_engine(bind, loop=loop, **kwargs)
+            bind = await create_engine(bind, loop=loop, bakery=self._bakery, **kwargs)
         self.bind = bind
         return bind
 
@@ -531,6 +531,9 @@ class Gino(sa.MetaData):
         """
         return self.bind.transaction(*args, **kwargs)
 
+    def bake(self, func_or_elem=None, **execution_options):
+        return self._bakery.bake(func_or_elem, metadata=self, **execution_options)
+
 
 class _PlaceHolder:
     __slots__ = "_exception"
@@ -547,3 +550,6 @@ class _PlaceHolder:
         if key == "_exception":
             return super().__setattr__(key, value)
         raise self._exception
+
+    def __bool__(self):
+        return False
